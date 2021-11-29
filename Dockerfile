@@ -10,6 +10,9 @@ ENV MINIO_ACCESS_KEY_FILE=access_key \
 
 RUN git clone https://github.com/minio/minio
 WORKDIR minio
+# check out to a particular commit that works
+# e49c1845955a7419698faccff1f7c514ee84ae7c on Nov 29, 2021
+RUN git checkout e49c1845955a7419698faccff1f7c514ee84ae7c
 
 # copy new files
 COPY cmd/gateway-interface.go cmd/
