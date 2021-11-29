@@ -31,49 +31,6 @@ import (
 	irodsclient_types "github.com/cyverse/go-irodsclient/irods/types"
 )
 
-/*
- import (
-	 "context"
-	 "crypto/md5"
-	 "crypto/rand"
-	 "encoding/hex"
-	 "encoding/json"
-	 "fmt"
-	 "io"
-	 "mime"
-	 "net/http"
-	 "path/filepath"
-	 "sort"
-	 "strconv"
-	 "strings"
-	 "time"
-
-	 humanize "github.com/dustin/go-humanize"
-	 gorods "github.com/jjacquay712/GoRODS"
-	 "github.com/minio/cli"
-	 "github.com/minio/minio/cmd"
-	 "github.com/minio/minio/cmd/logger"
-	 "github.com/minio/minio/pkg/auth"
-	 "github.com/minio/minio/pkg/policy"
-	 "github.com/minio/minio/pkg/policy/condition"
-
-	 minio "github.com/minio/minio/cmd"
- )
-
- const (
-	 irodsBlockSize             = 100 * humanize.MiByte
-	 irodsS3MinPartSize         = 5 * humanize.MiByte
-	 metadataObjectNameTemplate = "multipart_v1_%s_%x_irods.json"
-	 irodsMarkerPrefix          = "{minio}"
-	 irodsIQuestQuery           = "minio_list_objects"
-	 irodsMultipartSubCol       = "multiparts"
-	 irodsObjMetaAttr           = "minio_obj"
-	 irodsMultipartMetaAttr     = "minio_multipart"
-	 irodsBucketMetaAttr        = "minio_loc"
-	 irodsConPoolSize           = 4
- )
-*/
-
 const (
 	irodsClientName                      string        = "minio-irods-gateway"
 	defaultIRODSOperationTimeout         time.Duration = 5 * time.Minute
@@ -679,35 +636,26 @@ func (l *irodsObjects) PutObject(ctx context.Context, bucket string, object stri
 			return objInfo, irodsToObjectErr(ctx, err, bucket, object)
 		}
 	} else {
-		tmpname := l.irodsPathJoin(minioMetaTmpBucket, minio.MustGetUUID())
+		dir := path.Dir(name)
+		if dir != "" {
+			if err = l.client.MakeDir(dir, true); err != nil {
+				return objInfo, irodsToObjectErr(ctx, err, bucket, object)
+			}
+		}
 
-		fh, err := l.client.CreateFile(tmpname, "")
+		fh, err := l.client.CreateFile(name, "")
 		if err != nil {
 			return objInfo, irodsToObjectErr(ctx, err, bucket, object)
 		}
 
 		rw := NewIRODSFileRW(fh)
 
-		defer l.deleteObject(l.irodsPathJoin(minioMetaTmpBucket), tmpname)
-
 		if _, err = io.Copy(rw, r); err != nil {
 			rw.Close()
 			return objInfo, irodsToObjectErr(ctx, err, bucket, object)
 		}
 
-		dir := path.Dir(name)
-		if dir != "" {
-			if err = l.client.MakeDir(dir, true); err != nil {
-				rw.Close()
-				l.deleteObject(l.irodsPathJoin(bucket), dir)
-				return objInfo, irodsToObjectErr(ctx, err, bucket, object)
-			}
-		}
 		rw.Close()
-
-		if err = l.client.RenameFile(tmpname, name); err != nil {
-			return objInfo, irodsToObjectErr(ctx, err, bucket, object)
-		}
 	}
 
 	fi, err := l.client.Stat(name)
