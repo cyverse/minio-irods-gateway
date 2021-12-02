@@ -45,34 +45,34 @@ const (
 
 func init() {
 	const irodsGatewayTemplate = `NAME:
-	 {{.HelpName}} - {{.Usage}}
-  
- USAGE:
-	 {{.HelpName}} {{if .VisibleFlags}}[FLAGS]{{end}} [ENDPOINT]
- {{if .VisibleFlags}}
- FLAGS:
-	 {{range .VisibleFlags}}{{.}}
-	 {{end}}{{end}}
- ENDPOINT:
-	 iRODS server endpoint. An example ENDPOINT is irods://data.cyverse.org:1247/iplant/home/<username>
-  
- EXAMPLES:
-   1. Start minio gateway server for iRODS backend.
-	 {{.Prompt}} {{.EnvVarSetCommand}} MINIO_ACCESS_KEY{{.AssignmentOperator}}username
-	 {{.Prompt}} {{.EnvVarSetCommand}} MINIO_SECRET_KEY{{.AssignmentOperator}}password
-	 {{.Prompt}} {{.HelpName}}
-  
-   2. Start minio gateway server for iRODS backend with edge caching enabled
-	 {{.Prompt}} {{.EnvVarSetCommand}} MINIO_ACCESS_KEY{{.AssignmentOperator}}username
-	 {{.Prompt}} {{.EnvVarSetCommand}} MINIO_SECRET_KEY{{.AssignmentOperator}}password
-	 {{.Prompt}} {{.EnvVarSetCommand}} MINIO_CACHE_DRIVES{{.AssignmentOperator}}"/mnt/drive1,/mnt/drive2,/mnt/drive3,/mnt/drive4"
-	 {{.Prompt}} {{.EnvVarSetCommand}} MINIO_CACHE_EXCLUDE{{.AssignmentOperator}}"bucket1/*,*.png"
-	 {{.Prompt}} {{.EnvVarSetCommand}} MINIO_CACHE_QUOTA{{.AssignmentOperator}}90
-	 {{.Prompt}} {{.EnvVarSetCommand}} MINIO_CACHE_AFTER{{.AssignmentOperator}}3
-	 {{.Prompt}} {{.EnvVarSetCommand}} MINIO_CACHE_WATERMARK_LOW{{.AssignmentOperator}}75
-	 {{.Prompt}} {{.EnvVarSetCommand}} MINIO_CACHE_WATERMARK_HIGH{{.AssignmentOperator}}85
-	 {{.Prompt}} {{.HelpName}}
-  `
+	   {{.HelpName}} - {{.Usage}}
+	
+   USAGE:
+	   {{.HelpName}} {{if .VisibleFlags}}[FLAGS]{{end}} [ENDPOINT]
+   {{if .VisibleFlags}}
+   FLAGS:
+	   {{range .VisibleFlags}}{{.}}
+	   {{end}}{{end}}
+   ENDPOINT:
+	   iRODS server endpoint. An example ENDPOINT is irods://data.cyverse.org:1247/iplant/home/<username>
+	
+   EXAMPLES:
+	 1. Start minio gateway server for iRODS backend.
+	   {{.Prompt}} {{.EnvVarSetCommand}} MINIO_ACCESS_KEY{{.AssignmentOperator}}username
+	   {{.Prompt}} {{.EnvVarSetCommand}} MINIO_SECRET_KEY{{.AssignmentOperator}}password
+	   {{.Prompt}} {{.HelpName}}
+	
+	 2. Start minio gateway server for iRODS backend with edge caching enabled
+	   {{.Prompt}} {{.EnvVarSetCommand}} MINIO_ACCESS_KEY{{.AssignmentOperator}}username
+	   {{.Prompt}} {{.EnvVarSetCommand}} MINIO_SECRET_KEY{{.AssignmentOperator}}password
+	   {{.Prompt}} {{.EnvVarSetCommand}} MINIO_CACHE_DRIVES{{.AssignmentOperator}}"/mnt/drive1,/mnt/drive2,/mnt/drive3,/mnt/drive4"
+	   {{.Prompt}} {{.EnvVarSetCommand}} MINIO_CACHE_EXCLUDE{{.AssignmentOperator}}"bucket1/*,*.png"
+	   {{.Prompt}} {{.EnvVarSetCommand}} MINIO_CACHE_QUOTA{{.AssignmentOperator}}90
+	   {{.Prompt}} {{.EnvVarSetCommand}} MINIO_CACHE_AFTER{{.AssignmentOperator}}3
+	   {{.Prompt}} {{.EnvVarSetCommand}} MINIO_CACHE_WATERMARK_LOW{{.AssignmentOperator}}75
+	   {{.Prompt}} {{.EnvVarSetCommand}} MINIO_CACHE_WATERMARK_HIGH{{.AssignmentOperator}}85
+	   {{.Prompt}} {{.HelpName}}
+	`
 
 	minio.RegisterGatewayCommand(cli.Command{
 		Name:               minio.IRODSBackendGateway,
@@ -185,16 +185,6 @@ func (g *IRODS) Name() string {
 
 // NewGatewayLayer returns iRODS ObjectLayer.
 func (g *IRODS) NewGatewayLayer(creds madmin.Credentials) (minio.ObjectLayer, error) {
-	metrics := minio.NewMetrics()
-
-	/*
-		 TODO: Use this for reporting metrics
-		 t := &minio.MetricsTransport{
-			 Transport: minio.NewGatewayHTTPTransport(),
-			 Metrics:   metrics,
-		 }
-	*/
-
 	if len(g.username) == 0 {
 		g.username = creds.AccessKey
 	}
@@ -227,7 +217,6 @@ func (g *IRODS) NewGatewayLayer(creds madmin.Credentials) (minio.ObjectLayer, er
 		zone:     g.zone,
 		path:     g.path,
 		username: g.username,
-		metrics:  metrics,
 		listPool: minio.NewTreeWalkPool(time.Minute * 30),
 	}
 
@@ -241,7 +230,6 @@ type irodsObjects struct {
 	zone     string
 	path     string
 	username string
-	metrics  *minio.BackendMetrics
 	listPool *minio.TreeWalkPool
 }
 
@@ -288,7 +276,13 @@ func (l *irodsObjects) irodsPathJoin(args ...string) string {
 
 // GetMetrics returns this gateway's metrics
 func (l *irodsObjects) GetMetrics(ctx context.Context) (*minio.BackendMetrics, error) {
-	return l.metrics, nil
+	metrics := l.client.Session.GetTransferMetrics()
+	minioMetrics := minio.NewMetrics()
+
+	minioMetrics.IncBytesReceived(metrics.BytesReceived)
+	minioMetrics.IncBytesSent(metrics.BytesSent)
+
+	return minioMetrics, nil
 }
 
 // Shutdown saves any gateway metadata to disk
