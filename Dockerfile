@@ -20,7 +20,7 @@ COPY cmd/gateway/gateway.go cmd/gateway/
 COPY cmd/gateway/irods cmd/gateway/irods
 
 # get go-irodsclient
-RUN go get github.com/cyverse/go-irodsclient && \
+RUN go get github.com/cyverse/go-irodsclient@v0.5.11 && \
     go mod tidy
 
 RUN go install -v -ldflags "$(go run buildscripts/gen-ldflags.go)"
