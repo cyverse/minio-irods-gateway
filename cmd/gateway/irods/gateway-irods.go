@@ -13,7 +13,6 @@ import (
 	"net/http"
 	"net/url"
 	"path"
-	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -156,11 +155,22 @@ func parseIRODSURL(inputURL string) (*IRODS, error) {
 		return nil, err
 	}
 
+	if irodsPath == "/" {
+		err = fmt.Errorf("path (%s) must not be a root", inputURL)
+		return nil, err
+	}
+
+	irodsPath = strings.TrimSuffix(irodsPath, "/")
+
+	bucketName := path.Base(irodsPath)
+	irodsParentPath := path.Dir(irodsPath)
+
 	return &IRODS{
-		host: host,
-		port: port,
-		zone: zone,
-		path: irodsPath,
+		host:   host,
+		port:   port,
+		zone:   zone,
+		path:   irodsParentPath,
+		bucket: bucketName,
 
 		username: user,
 		password: password,
@@ -169,10 +179,11 @@ func parseIRODSURL(inputURL string) (*IRODS, error) {
 
 // IRODS implements Gateway.
 type IRODS struct {
-	host string
-	port int
-	zone string
-	path string
+	host   string
+	port   int
+	zone   string
+	path   string
+	bucket string
 
 	username string
 	password string
@@ -216,6 +227,7 @@ func (g *IRODS) NewGatewayLayer(creds madmin.Credentials) (minio.ObjectLayer, er
 		client:   irodsfsclient,
 		zone:     g.zone,
 		path:     g.path,
+		bucket:   g.bucket,
 		username: g.username,
 		listPool: minio.NewTreeWalkPool(time.Minute * 30),
 	}
@@ -229,6 +241,7 @@ type irodsObjects struct {
 	client   *irodsclient_fs.FileSystem
 	zone     string
 	path     string
+	bucket   string
 	username string
 	listPool *minio.TreeWalkPool
 }
@@ -300,32 +313,26 @@ func (l *irodsObjects) StorageInfo(ctx context.Context) (si minio.StorageInfo, _
 	return si, nil
 }
 
-// ListBuckets lists all iRODS buckets (collections)
+// ListBuckets lists iRODS collections
 func (l *irodsObjects) ListBuckets(ctx context.Context) (buckets []minio.BucketInfo, err error) {
-	entries, err := l.client.List(l.irodsPathJoin())
+	// Ignore all reserved bucket names and invalid bucket names.
+	if isReservedOrInvalidBucket(l.bucket, false) {
+		err := fmt.Errorf("bucket name %s is invalid or reserved", l.bucket)
+		logger.LogIf(ctx, err)
+		return nil, irodsToObjectErr(ctx, err)
+	}
+
+	entry, err := l.client.StatDir(l.irodsPathJoin(l.bucket))
 	if err != nil {
 		logger.LogIf(ctx, err)
 		return nil, irodsToObjectErr(ctx, err)
 	}
 
-	for _, entry := range entries {
-		// Ignore all non-collections
-		if entry.Type != irodsclient_fs.DirectoryEntry {
-			continue
-		}
+	buckets = append(buckets, minio.BucketInfo{
+		Name:    entry.Name,
+		Created: entry.CreateTime,
+	})
 
-		// Ignore all reserved bucket names and invalid bucket names.
-		if isReservedOrInvalidBucket(entry.Name, false) {
-			continue
-		}
-		buckets = append(buckets, minio.BucketInfo{
-			Name:    entry.Name,
-			Created: entry.CreateTime,
-		})
-	}
-
-	// Sort bucket infos by bucket name.
-	sort.Sort(byBucketName(buckets))
 	return buckets, nil
 }
 
@@ -381,30 +388,14 @@ func (l *irodsObjects) GetBucketInfo(ctx context.Context, bucket string) (bi min
 	}, nil
 }
 
-// MakeBucket creates a new container on iRODS backend
+// MakeBucketWithLocation creates a new bucket (not allowed)
 func (l *irodsObjects) MakeBucketWithLocation(ctx context.Context, bucket string, opts minio.BucketOptions) error {
-	if opts.LockEnabled || opts.VersioningEnabled {
-		return minio.NotImplemented{}
-	}
-
-	if !irodsIsValidBucketName(bucket) {
-		return minio.BucketNameInvalid{Bucket: bucket}
-	}
-
-	return irodsToObjectErr(ctx, l.client.MakeDir(l.irodsPathJoin(bucket), true), bucket)
+	return minio.NotImplemented{}
 }
 
-// DeleteBucket deletes a bucket (collection) on iRODS
+// DeleteBucket deletes a bucket (not allowed)
 func (l *irodsObjects) DeleteBucket(ctx context.Context, bucket string, opts minio.DeleteBucketOptions) error {
-	if !irodsIsValidBucketName(bucket) {
-		return minio.BucketNameInvalid{Bucket: bucket}
-	}
-
-	if opts.Force {
-		return irodsToObjectErr(ctx, l.client.RemoveDir(l.irodsPathJoin(bucket), true, true), bucket)
-	}
-
-	return irodsToObjectErr(ctx, l.client.RemoveDir(l.irodsPathJoin(bucket), false, false), bucket)
+	return minio.NotImplemented{}
 }
 
 // ListObjects lists all blobs in iRODS bucket (collection) filtered by prefix
