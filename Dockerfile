@@ -13,6 +13,11 @@ WORKDIR minio
 # check out to a particular commit that works
 # e49c1845955a7419698faccff1f7c514ee84ae7c on Nov 29, 2021
 RUN git checkout e49c1845955a7419698faccff1f7c514ee84ae7c
+RUN go mod tidy
+
+# build minio for the first time (to cache)
+RUN go install -v -ldflags "$(go run buildscripts/gen-ldflags.go)"
+RUN cp dockerscripts/docker-entrypoint.sh /usr/bin/
 
 # copy new files
 COPY cmd/gateway-interface.go cmd/
@@ -23,8 +28,9 @@ COPY cmd/gateway/irods cmd/gateway/irods
 RUN go get github.com/cyverse/go-irodsclient@v0.5.11 && \
     go mod tidy
 
+# rebuild
 RUN go install -v -ldflags "$(go run buildscripts/gen-ldflags.go)"
-RUN cp dockerscripts/docker-entrypoint.sh /usr/bin/
+
 
 EXPOSE 9000
 
