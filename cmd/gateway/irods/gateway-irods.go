@@ -15,7 +15,6 @@ import (
 	"path"
 	"strconv"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/minio/cli"
@@ -44,34 +43,34 @@ const (
 
 func init() {
 	const irodsGatewayTemplate = `NAME:
-	   {{.HelpName}} - {{.Usage}}
-	
-   USAGE:
-	   {{.HelpName}} {{if .VisibleFlags}}[FLAGS]{{end}} [ENDPOINT]
-   {{if .VisibleFlags}}
-   FLAGS:
-	   {{range .VisibleFlags}}{{.}}
-	   {{end}}{{end}}
-   ENDPOINT:
-	   iRODS server endpoint. An example ENDPOINT is irods://data.cyverse.org:1247/iplant/home/<username>
-	
-   EXAMPLES:
-	 1. Start minio gateway server for iRODS backend.
-	   {{.Prompt}} {{.EnvVarSetCommand}} MINIO_ACCESS_KEY{{.AssignmentOperator}}username
-	   {{.Prompt}} {{.EnvVarSetCommand}} MINIO_SECRET_KEY{{.AssignmentOperator}}password
-	   {{.Prompt}} {{.HelpName}}
-	
-	 2. Start minio gateway server for iRODS backend with edge caching enabled
-	   {{.Prompt}} {{.EnvVarSetCommand}} MINIO_ACCESS_KEY{{.AssignmentOperator}}username
-	   {{.Prompt}} {{.EnvVarSetCommand}} MINIO_SECRET_KEY{{.AssignmentOperator}}password
-	   {{.Prompt}} {{.EnvVarSetCommand}} MINIO_CACHE_DRIVES{{.AssignmentOperator}}"/mnt/drive1,/mnt/drive2,/mnt/drive3,/mnt/drive4"
-	   {{.Prompt}} {{.EnvVarSetCommand}} MINIO_CACHE_EXCLUDE{{.AssignmentOperator}}"bucket1/*,*.png"
-	   {{.Prompt}} {{.EnvVarSetCommand}} MINIO_CACHE_QUOTA{{.AssignmentOperator}}90
-	   {{.Prompt}} {{.EnvVarSetCommand}} MINIO_CACHE_AFTER{{.AssignmentOperator}}3
-	   {{.Prompt}} {{.EnvVarSetCommand}} MINIO_CACHE_WATERMARK_LOW{{.AssignmentOperator}}75
-	   {{.Prompt}} {{.EnvVarSetCommand}} MINIO_CACHE_WATERMARK_HIGH{{.AssignmentOperator}}85
-	   {{.Prompt}} {{.HelpName}}
-	`
+			   {{.HelpName}} - {{.Usage}}
+			
+		   USAGE:
+			   {{.HelpName}} {{if .VisibleFlags}}[FLAGS]{{end}} [ENDPOINT]
+		   {{if .VisibleFlags}}
+		   FLAGS:
+			   {{range .VisibleFlags}}{{.}}
+			   {{end}}{{end}}
+		   ENDPOINT:
+			   iRODS server endpoint. An example ENDPOINT is irods://data.cyverse.org:1247/iplant/home/<username>
+			
+		   EXAMPLES:
+			 1. Start minio gateway server for iRODS backend.
+			   {{.Prompt}} {{.EnvVarSetCommand}} MINIO_ACCESS_KEY{{.AssignmentOperator}}username
+			   {{.Prompt}} {{.EnvVarSetCommand}} MINIO_SECRET_KEY{{.AssignmentOperator}}password
+			   {{.Prompt}} {{.HelpName}}
+			
+			 2. Start minio gateway server for iRODS backend with edge caching enabled
+			   {{.Prompt}} {{.EnvVarSetCommand}} MINIO_ACCESS_KEY{{.AssignmentOperator}}username
+			   {{.Prompt}} {{.EnvVarSetCommand}} MINIO_SECRET_KEY{{.AssignmentOperator}}password
+			   {{.Prompt}} {{.EnvVarSetCommand}} MINIO_CACHE_DRIVES{{.AssignmentOperator}}"/mnt/drive1,/mnt/drive2,/mnt/drive3,/mnt/drive4"
+			   {{.Prompt}} {{.EnvVarSetCommand}} MINIO_CACHE_EXCLUDE{{.AssignmentOperator}}"bucket1/*,*.png"
+			   {{.Prompt}} {{.EnvVarSetCommand}} MINIO_CACHE_QUOTA{{.AssignmentOperator}}90
+			   {{.Prompt}} {{.EnvVarSetCommand}} MINIO_CACHE_AFTER{{.AssignmentOperator}}3
+			   {{.Prompt}} {{.EnvVarSetCommand}} MINIO_CACHE_WATERMARK_LOW{{.AssignmentOperator}}75
+			   {{.Prompt}} {{.EnvVarSetCommand}} MINIO_CACHE_WATERMARK_HIGH{{.AssignmentOperator}}85
+			   {{.Prompt}} {{.HelpName}}
+			`
 
 	minio.RegisterGatewayCommand(cli.Command{
 		Name:               minio.IRODSBackendGateway,
@@ -315,6 +314,8 @@ func (l *irodsObjects) StorageInfo(ctx context.Context) (si minio.StorageInfo, _
 
 // ListBuckets lists iRODS collections
 func (l *irodsObjects) ListBuckets(ctx context.Context) (buckets []minio.BucketInfo, err error) {
+	// logger.Info("ListBuckets")
+
 	// Ignore all reserved bucket names and invalid bucket names.
 	if isReservedOrInvalidBucket(l.bucket, false) {
 		err := fmt.Errorf("bucket name %s is invalid or reserved", l.bucket)
@@ -347,6 +348,9 @@ func (l *irodsObjects) isLeaf(bucket, leafPath string) bool {
 func (l *irodsObjects) listDirFactory() minio.ListDirFunc {
 	// listDir - lists all the entries at a given prefix and given entry in the prefix.
 	listDir := func(bucket, prefixDir, prefixEntry string) (emptyDir bool, entries []string, delayIsLeaf bool) {
+		// irodsPath := l.irodsPathJoin(bucket, prefixDir)
+		// logger.Info("listDir - %s", irodsPath)
+
 		irodsEntries, err := l.client.List(l.irodsPathJoin(bucket, prefixDir))
 		if err != nil {
 			logger.LogIf(minio.GlobalContext, err)
@@ -377,8 +381,17 @@ func (l *irodsObjects) listDirFactory() minio.ListDirFunc {
 
 // GetBucketInfo gets bucket metadata
 func (l *irodsObjects) GetBucketInfo(ctx context.Context, bucket string) (bi minio.BucketInfo, err error) {
-	fi, err := l.client.StatDir(l.irodsPathJoin(bucket))
+	// logger.Info("GetBucketInfo - %s", bucket)
+
+	irodsPath := l.irodsPathJoin(bucket)
+	irodsPath = strings.TrimSuffix(irodsPath, "/")
+
+	fi, err := l.client.StatDir(irodsPath)
 	if err != nil {
+		if irodsclient_types.IsFileNotFoundError(err) {
+			return bi, minio.BucketNotFound{Bucket: bucket}
+		}
+
 		return bi, irodsToObjectErr(ctx, err, bucket)
 	}
 
@@ -400,71 +413,70 @@ func (l *irodsObjects) DeleteBucket(ctx context.Context, bucket string, opts min
 
 // ListObjects lists all blobs in iRODS bucket (collection) filtered by prefix
 func (l *irodsObjects) ListObjects(ctx context.Context, bucket, prefix, marker, delimiter string, maxKeys int) (loi minio.ListObjectsInfo, err error) {
-	var mutex sync.Mutex
-	fileInfos := make(map[string]*irodsclient_fs.Entry)
-	targetPath := l.irodsPathJoin(bucket, prefix)
+	// logger.Info("ListObjects - bucket %s, prefix %s", bucket, prefix)
 
-	var targetFileInfo *irodsclient_fs.Entry
+	irodsPath := l.irodsPathJoin(bucket, prefix)
+	irodsSafePath := strings.TrimSuffix(irodsPath, "/")
 
-	if targetFileInfo, err = l.populateDirectoryListing(targetPath, fileInfos); err != nil {
-		return loi, irodsToObjectErr(ctx, err, bucket)
+	stat, err := l.client.Stat(irodsSafePath)
+	if err != nil {
+		return loi, irodsToObjectErr(ctx, err, bucket, prefix)
 	}
 
 	// If the user is trying to list a single file, bypass the entire directory-walking code below
 	// and just return the single file's information.
-	if targetFileInfo.Type == irodsclient_fs.FileEntry {
+	if stat.Type == irodsclient_fs.FileEntry {
+		if strings.HasSuffix(irodsPath, "/") {
+			// the path is for a file and ends with "/"
+			return minio.ListObjectsInfo{
+				IsTruncated: false,
+				Objects:     []minio.ObjectInfo{},
+				Prefixes:    []string{},
+			}, nil
+		}
+
 		return minio.ListObjectsInfo{
 			IsTruncated: false,
-			NextMarker:  "",
 			Objects: []minio.ObjectInfo{
-				fileInfoToObjectInfo(bucket, prefix, targetFileInfo),
+				fileInfoToObjectInfo(bucket, prefix, stat),
 			},
 			Prefixes: []string{},
 		}, nil
 	}
 
 	getObjectInfo := func(ctx context.Context, bucket, entry string) (minio.ObjectInfo, error) {
-		mutex.Lock()
-		defer mutex.Unlock()
+		irodsFilePath := l.irodsPathJoin(bucket, entry)
+		// logger.Info("getObjectInfo - %s", irodsFilePath)
 
-		filePath := path.Clean(l.irodsPathJoin(bucket, entry))
-		fi, ok := fileInfos[filePath]
+		irodsSafeFilePath := strings.TrimSuffix(irodsFilePath, "/")
 
-		// If the file info is not known, this may be a recursive listing and filePath is a
-		// child of a sub-directory. In this case, obtain that sub-directory's listing.
-		if !ok {
-			parentPath := path.Dir(filePath)
-
-			if _, err := l.populateDirectoryListing(parentPath, fileInfos); err != nil {
-				return minio.ObjectInfo{}, irodsToObjectErr(ctx, err, bucket)
-			}
-
-			fi, ok = fileInfos[filePath]
-			if !ok {
-				err = fmt.Errorf("could not get FileInfo for path '%s'", filePath)
-				return minio.ObjectInfo{}, irodsToObjectErr(ctx, err, bucket, entry)
-			}
+		fi, err := l.client.Stat(irodsSafeFilePath)
+		if err != nil {
+			return minio.ObjectInfo{}, irodsToObjectErr(ctx, err, bucket, entry)
 		}
 
-		objectInfo := fileInfoToObjectInfo(bucket, entry, fi)
+		if fi.Type == irodsclient_fs.FileEntry && strings.HasSuffix(irodsFilePath, "/") {
+			// file but ends with "/"
+			return minio.ObjectInfo{}, nil
+		}
 
-		delete(fileInfos, filePath)
-
-		return objectInfo, nil
+		return fileInfoToObjectInfo(bucket, entry, fi), nil
 	}
 
 	return minio.ListObjects(ctx, l, bucket, prefix, marker, delimiter, maxKeys, l.listPool, l.listDirFactory(), l.isLeaf, l.isLeafDir, getObjectInfo, getObjectInfo)
 }
 
 // ListObjectsV2 lists all blobs in iRODS bucket filtered by prefix
-func (n *irodsObjects) ListObjectsV2(ctx context.Context, bucket, prefix, continuationToken, delimiter string, maxKeys int, fetchOwner bool, startAfter string) (loi minio.ListObjectsV2Info, err error) {
+func (l *irodsObjects) ListObjectsV2(ctx context.Context, bucket, prefix, continuationToken, delimiter string, maxKeys int, fetchOwner bool, startAfter string) (loi minio.ListObjectsV2Info, err error) {
+	// logger.Info("ListObjectsV2 - bucket %s, prefix %s", bucket, prefix)
+
 	// fetchOwner is not supported and unused.
 	marker := continuationToken
 	if marker == "" {
 		marker = startAfter
 	}
 
-	resultV1, err := n.ListObjects(ctx, bucket, prefix, marker, delimiter, maxKeys)
+	resultV1, err := l.ListObjects(ctx, bucket, prefix, marker, delimiter, maxKeys)
 	if err != nil {
 		return loi, err
 	}
@@ -487,38 +499,13 @@ func fileInfoToObjectInfo(bucket string, entry string, fi *irodsclient_fs.Entry)
 		IsDir:   fi.Type == irodsclient_fs.DirectoryEntry,
 		// iRODS doesn't have access time, we will use modify time
 		AccTime: fi.ModifyTime,
+		ETag:    fmt.Sprintf("%d-%s", fi.ID, fi.CheckSum),
 	}
-}
-
-// Lists a path's direct, first-level entries and populates them in the `fileInfos` cache which maps
-// a path entry to an `*irodsclient_fs.Entry`. It also saves the listed path's `*irodsclient_fs.Entry` in the cache.
-func (l *irodsObjects) populateDirectoryListing(filePath string, fileInfos map[string]*irodsclient_fs.Entry) (*irodsclient_fs.Entry, error) {
-	dirStat, err := l.client.StatDir(filePath)
-	if err != nil {
-		return nil, err
-	}
-
-	if dirStat.Type != irodsclient_fs.DirectoryEntry {
-		return dirStat, nil
-	}
-
-	entries, err := l.client.List(filePath)
-	if err != nil {
-		return nil, err
-	}
-
-	key := path.Clean(filePath)
-
-	fileInfos[key] = dirStat
-	for _, entry := range entries {
-		fileInfos[entry.Path] = entry
-	}
-
-	return dirStat, nil
 }
 
 func (l *irodsObjects) isObjectDir(ctx context.Context, bucket, object string) bool {
-	entry, err := l.client.Stat(l.irodsPathJoin(bucket, object))
+	irodsPath := l.irodsPathJoin(bucket, object)
+	entry, err := l.client.Stat(irodsPath)
 	if err != nil {
 		if irodsclient_types.IsFileNotFoundError(err) {
 			return false
@@ -527,45 +514,27 @@ func (l *irodsObjects) isObjectDir(ctx context.Context, bucket, object string) b
 		return false
 	}
 
-	if entry.Type != irodsclient_fs.DirectoryEntry {
-		return false
-	}
-
-	entries, err := l.client.List(entry.Path)
-	if err != nil {
-		logger.LogIf(ctx, err)
-		return false
-	}
-
-	return len(entries) == 0
+	return entry.Type == irodsclient_fs.DirectoryEntry
 }
 
 func (l *irodsObjects) GetObjectInfo(ctx context.Context, bucket, object string, opts minio.ObjectOptions) (objInfo minio.ObjectInfo, err error) {
-	_, err = l.client.Stat(l.irodsPathJoin(bucket))
-	if err != nil {
-		return objInfo, irodsToObjectErr(ctx, err, bucket)
-	}
+	irodsPath := l.irodsPathJoin(bucket, object)
+	// logger.Info("GetObjectInfo - %s", irodsPath)
 
-	if strings.HasSuffix(object, irodsSeparator) && !l.isObjectDir(ctx, bucket, object) {
-		p := l.irodsPathJoin(bucket, object)
-		return objInfo, irodsToObjectErr(ctx, irodsclient_types.NewFileNotFoundError(p+" not found"), bucket, object)
-	}
+	irodsPath = strings.TrimSuffix(irodsPath, "/")
 
-	fi, err := l.client.Stat(l.irodsPathJoin(bucket, object))
+	fi, err := l.client.Stat(irodsPath)
 	if err != nil {
 		return objInfo, irodsToObjectErr(ctx, err, bucket, object)
 	}
-	return minio.ObjectInfo{
-		Bucket:  bucket,
-		Name:    object,
-		ModTime: fi.ModifyTime,
-		Size:    fi.Size,
-		IsDir:   fi.Type == irodsclient_fs.DirectoryEntry,
-		AccTime: fi.ModifyTime,
-	}, nil
+
+	return fileInfoToObjectInfo(bucket, object, fi), nil
 }
 
 func (l *irodsObjects) GetObjectNInfo(ctx context.Context, bucket, object string, rs *minio.HTTPRangeSpec, h http.Header, lockType minio.LockType, opts minio.ObjectOptions) (gr *minio.GetObjectReader, err error) {
+	// irodsPath := l.irodsPathJoin(bucket, object)
+	// logger.Info("GetObjectNInfo - %s", irodsPath)
+
 	objInfo, err := l.GetObjectInfo(ctx, bucket, object, opts)
 	if err != nil {
 		return nil, err
@@ -590,11 +559,16 @@ func (l *irodsObjects) GetObjectNInfo(ctx context.Context, bucket, object string
 }
 
 func (l *irodsObjects) getObject(ctx context.Context, bucket, key string, startOffset, length int64, writer io.Writer, etag string, opts minio.ObjectOptions) error {
-	if _, err := l.client.Stat(l.irodsPathJoin(bucket)); err != nil {
-		return irodsToObjectErr(ctx, err, bucket)
+	irodsPath := l.irodsPathJoin(bucket, key)
+	// logger.Info("getObject - %s", irodsPath)
+
+	irodsPath = strings.TrimSuffix(irodsPath, "/")
+
+	if _, err := l.client.Stat(irodsPath); err != nil {
+		return irodsToObjectErr(ctx, err, bucket, key)
 	}
 
-	fh, err := l.client.OpenFile(l.irodsPathJoin(bucket, key), "", "r")
+	fh, err := l.client.OpenFile(irodsPath, "", "r")
 	if err != nil {
 		return irodsToObjectErr(ctx, err, bucket, key)
 	}
@@ -607,28 +581,31 @@ func (l *irodsObjects) getObject(ctx context.Context, bucket, key string, startO
 }
 
 func (l *irodsObjects) PutObject(ctx context.Context, bucket string, object string, r *minio.PutObjReader, opts minio.ObjectOptions) (objInfo minio.ObjectInfo, err error) {
+	irodsPath := l.irodsPathJoin(bucket, object)
+	// logger.Info("PutObject - %s", irodsPath)
+
+	irodsPath = strings.TrimSuffix(irodsPath, "/")
+
 	_, err = l.client.Stat(l.irodsPathJoin(bucket))
 	if err != nil {
 		return objInfo, irodsToObjectErr(ctx, err, bucket)
 	}
 
-	name := l.irodsPathJoin(bucket, object)
-
 	// If its a directory create a prefix {
 	if strings.HasSuffix(object, irodsSeparator) && r.Size() == 0 {
-		if err = l.client.MakeDir(name, true); err != nil {
-			l.deleteObject(l.irodsPathJoin(bucket), name)
+		if err = l.client.MakeDir(irodsPath, true); err != nil {
+			l.deleteObject(l.irodsPathJoin(bucket), irodsPath)
 			return objInfo, irodsToObjectErr(ctx, err, bucket, object)
 		}
 	} else {
-		dir := path.Dir(name)
+		dir := path.Dir(irodsPath)
 		if dir != "" {
 			if err = l.client.MakeDir(dir, true); err != nil {
 				return objInfo, irodsToObjectErr(ctx, err, bucket, object)
 			}
 		}
 
-		fh, err := l.client.CreateFile(name, "")
+		fh, err := l.client.CreateFile(irodsPath, "")
 		if err != nil {
 			return objInfo, irodsToObjectErr(ctx, err, bucket, object)
 		}
@@ -643,24 +620,21 @@ func (l *irodsObjects) PutObject(ctx context.Context, bucket string, object stri
 		rw.Close()
 	}
 
-	fi, err := l.client.Stat(name)
+	fi, err := l.client.Stat(irodsPath)
 	if err != nil {
 		return objInfo, irodsToObjectErr(ctx, err, bucket, object)
 	}
 
-	return minio.ObjectInfo{
-		Bucket:  bucket,
-		Name:    object,
-		ETag:    r.MD5CurrentHexString(),
-		ModTime: fi.ModifyTime,
-		Size:    fi.Size,
-		IsDir:   fi.Type == irodsclient_fs.DirectoryEntry,
-		AccTime: fi.ModifyTime,
-	}, nil
+	return fileInfoToObjectInfo(bucket, object, fi), nil
 }
 
 func (l *irodsObjects) CopyObject(ctx context.Context, srcBucket, srcObject, dstBucket, dstObject string, srcInfo minio.ObjectInfo, srcOpts, dstOpts minio.ObjectOptions) (minio.ObjectInfo, error) {
-	cpSrcDstSame := minio.IsStringEqual(l.irodsPathJoin(srcBucket, srcObject), l.irodsPathJoin(dstBucket, dstObject))
+	srcIrodsPath := l.irodsPathJoin(srcBucket, srcObject)
+	destIrodsPath := l.irodsPathJoin(dstBucket, dstObject)
+	srcIrodsPath = strings.TrimSuffix(srcIrodsPath, "/")
+	destIrodsPath = strings.TrimSuffix(destIrodsPath, "/")
+
+	cpSrcDstSame := minio.IsStringEqual(srcIrodsPath, destIrodsPath)
 	if cpSrcDstSame {
 		return l.GetObjectInfo(ctx, srcBucket, srcObject, minio.ObjectOptions{})
 	}
@@ -672,11 +646,18 @@ func (l *irodsObjects) CopyObject(ctx context.Context, srcBucket, srcObject, dst
 }
 
 func (l *irodsObjects) DeleteObject(ctx context.Context, bucket, object string, opts minio.ObjectOptions) (minio.ObjectInfo, error) {
-	err := irodsToObjectErr(ctx, l.deleteObject(l.irodsPathJoin(bucket), l.irodsPathJoin(bucket, object)), bucket, object)
+	irodsPath := l.irodsPathJoin(bucket, object)
+	// logger.Info("DeleteObject - %s", irodsPath)
+
+	err := l.deleteObject(l.irodsPathJoin(bucket), irodsPath)
+	if err != nil {
+		return minio.ObjectInfo{}, irodsToObjectErr(ctx, err, bucket, object)
+	}
+
 	return minio.ObjectInfo{
 		Bucket: bucket,
 		Name:   object,
-	}, err
+	}, nil
 }
 
 // deleteObject deletes a file path if its empty. If it's successfully deleted,
@@ -724,6 +705,9 @@ func (l *irodsObjects) deleteObject(basePath, deletePath string) error {
 }
 
 func (l *irodsObjects) DeleteObjects(ctx context.Context, bucket string, objects []minio.ObjectToDelete, opts minio.ObjectOptions) ([]minio.DeletedObject, []error) {
+	// irodsPath := l.irodsPathJoin(bucket)
+	// logger.Info("DeleteObjects - %s", irodsPath)
+
 	errs := make([]error, len(objects))
 	dobjects := make([]minio.DeletedObject, len(objects))
 	for idx, object := range objects {
@@ -738,7 +722,10 @@ func (l *irodsObjects) DeleteObjects(ctx context.Context, bucket string, objects
 }
 
 // GetBucketPolicy will get policy on bucket
-func (a *irodsObjects) GetBucketPolicy(ctx context.Context, bucket string) (bucketPolicy *policy.Policy, err error) {
+func (l *irodsObjects) GetBucketPolicy(ctx context.Context, bucket string) (bucketPolicy *policy.Policy, err error) {
+	// irodsPath := l.irodsPathJoin(bucket)
+	// logger.Info("GetBucketPolicy - %s", irodsPath)
+
 	return &policy.Policy{
 		Version: policy.DefaultVersion,
 		Statements: []policy.Statement{
@@ -758,4 +745,18 @@ func (a *irodsObjects) GetBucketPolicy(ctx context.Context, bucket string) (buck
 			),
 		},
 	}, nil
+}
+
+// IsCompressionSupported returns whether compression is applicable for this layer.
+func (l *irodsObjects) IsCompressionSupported() bool {
+	return false
+}
+
+// IsEncryptionSupported returns whether server side encryption is implemented for this layer.
+func (l *irodsObjects) IsEncryptionSupported() bool {
+	return false
+}
+
+func (l *irodsObjects) IsTaggingSupported() bool {
+	return false
 }
