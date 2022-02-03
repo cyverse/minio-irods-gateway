@@ -24,6 +24,7 @@ import (
 	"github.com/minio/minio/internal/logger"
 	"github.com/minio/pkg/bucket/policy"
 	"github.com/minio/pkg/bucket/policy/condition"
+	"github.com/minio/pkg/env"
 
 	irodsclient_fs "github.com/cyverse/go-irodsclient/fs"
 	irodsclient_types "github.com/cyverse/go-irodsclient/irods/types"
@@ -31,6 +32,7 @@ import (
 
 const (
 	irodsClientName                      string        = "minio-irods-gateway"
+	defaultIRODSConnectionLifespan       time.Duration = 1 * time.Hour
 	defaultIRODSOperationTimeout         time.Duration = 5 * time.Minute
 	defaultIRODSConnectionIdleTimeout    time.Duration = 5 * time.Minute
 	defaultIRODSConnectionMax            int           = 10
@@ -107,6 +109,7 @@ func parseIRODSURL(inputURL string) (*IRODS, error) {
 
 	user := ""
 	password := ""
+	ticket := ""
 
 	if u.User != nil {
 		uname := u.User.Username()
@@ -116,6 +119,14 @@ func parseIRODSURL(inputURL string) (*IRODS, error) {
 
 		if pwd, ok := u.User.Password(); ok {
 			password = pwd
+		}
+
+		// extract ticket_name
+		if t, ok := getTicket(user, password); ok {
+			user = ""
+			password = ""
+			ticket = t
+			logger.Info("use '%s' as the ticket for access", t)
 		}
 	}
 
@@ -173,7 +184,19 @@ func parseIRODSURL(inputURL string) (*IRODS, error) {
 
 		username: user,
 		password: password,
+		ticket:   ticket,
 	}, nil
+}
+
+func getTicket(username string, password string) (string, bool) {
+	if strings.ToLower(username) == "ticket" {
+		// If username is "ticket", we think password is <ticket_name>
+		return password, true
+	} else if len(password) == 0 && len(username) > 0 {
+		// If password is not given, username is a ticket
+		return username, true
+	}
+	return "", false
 }
 
 // IRODS implements Gateway.
@@ -186,6 +209,7 @@ type IRODS struct {
 
 	username string
 	password string
+	ticket   string
 }
 
 // Name implements Gateway interface.
@@ -193,28 +217,48 @@ func (g *IRODS) Name() string {
 	return minio.IRODSBackendGateway
 }
 
+func (g *IRODS) emptyAccount() bool {
+	if len(g.username) == 0 && len(g.password) == 0 && len(g.ticket) == 0 {
+		return true
+	}
+	return false
+}
+
+func (g *IRODS) setAnonymousUserForTicket() {
+	if len(g.ticket) > 0 {
+		g.username = env.Get("IRODS_ANONYMOUS_USERNAME", "anonymous")
+		g.password = env.Get("IRODS_ANONYMOUS_PASSWORD", "")
+	}
+}
+
 // NewGatewayLayer returns iRODS ObjectLayer.
 func (g *IRODS) NewGatewayLayer(creds madmin.Credentials) (minio.ObjectLayer, error) {
-	if len(g.username) == 0 {
-		g.username = creds.AccessKey
+	if g.emptyAccount() {
+		// extract ticket_name
+		if t, ok := getTicket(creds.AccessKey, creds.SecretKey); ok {
+			g.ticket = t
+			logger.Info("use '%s' as the ticket for access", t)
+		} else {
+			g.username = creds.AccessKey
+			g.password = creds.SecretKey
+		}
 	}
 
-	if len(g.password) == 0 {
-		g.password = creds.SecretKey
-	}
+	g.setAnonymousUserForTicket()
 
-	account, err := irodsclient_types.CreateIRODSAccount(g.host, g.port,
-		g.username, g.zone, irodsclient_types.AuthSchemeNative, g.password, "")
+	account, err := irodsclient_types.CreateIRODSAccountForTicket(g.host, g.port,
+		g.username, g.zone, irodsclient_types.AuthSchemeNative, g.password, g.ticket, "")
 	if err != nil {
 		return nil, fmt.Errorf("failed to create an IRODS Account - %v", err)
 	}
 
 	fsconfig := irodsclient_fs.NewFileSystemConfig(
 		irodsClientName,
+		defaultIRODSConnectionLifespan,
 		defaultIRODSOperationTimeout, defaultIRODSConnectionIdleTimeout,
 		defaultIRODSConnectionMax, defaultIRODSMetadataCacheTimeout,
 		defaultIRODSMetadataCacheCleanupTime,
-		defaultIRODSStartNewTransaction,
+		nil, defaultIRODSStartNewTransaction,
 	)
 
 	irodsfsclient, err := irodsclient_fs.NewFileSystem(account, fsconfig)
@@ -288,7 +332,7 @@ func (l *irodsObjects) irodsPathJoin(args ...string) string {
 
 // GetMetrics returns this gateway's metrics
 func (l *irodsObjects) GetMetrics(ctx context.Context) (*minio.BackendMetrics, error) {
-	metrics := l.client.Session.GetTransferMetrics()
+	metrics := l.client.GetTransferMetrics()
 	minioMetrics := minio.NewMetrics()
 
 	minioMetrics.IncBytesReceived(metrics.BytesReceived)
