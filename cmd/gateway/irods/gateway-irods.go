@@ -142,38 +142,19 @@ func parseIRODSURL(inputURL string) (*IRODS, error) {
 		port = int(port64)
 	}
 
-	fullpath := path.Clean(u.Path)
 	zone := ""
-	irodsPath := "/"
-	if len(fullpath) == 0 || fullpath[0] != '/' {
-		err = fmt.Errorf("path (%s) must contain an absolute path", u.Path)
-		return nil, err
+	irodsParentPath := ""
+	bucketName := ""
+
+	// for ticket-based access, set zone, path, bucket empty
+	if len(ticket) == 0 {
+		// get path from URL
+		fullpath := path.Clean(u.Path)
+		zone, irodsParentPath, bucketName, err = extractZonePathBucketName(fullpath)
+		if err != nil {
+			return nil, err
+		}
 	}
-
-	pos := strings.Index(fullpath[1:], "/")
-	if pos > 0 {
-		zone = strings.Trim(fullpath[1:pos+1], "/")
-		irodsPath = fullpath // starts with zone
-	} else if pos == -1 {
-		// no path
-		zone = strings.Trim(fullpath[1:], "/")
-		irodsPath = fullpath
-	}
-
-	if len(zone) == 0 || len(irodsPath) == 0 {
-		err = fmt.Errorf("path (%s) must contain an absolute path", inputURL)
-		return nil, err
-	}
-
-	if irodsPath == "/" {
-		err = fmt.Errorf("path (%s) must not be a root", inputURL)
-		return nil, err
-	}
-
-	irodsPath = strings.TrimSuffix(irodsPath, "/")
-
-	bucketName := path.Base(irodsPath)
-	irodsParentPath := path.Dir(irodsPath)
 
 	return &IRODS{
 		host:   host,
@@ -186,6 +167,42 @@ func parseIRODSURL(inputURL string) (*IRODS, error) {
 		password: password,
 		ticket:   ticket,
 	}, nil
+}
+
+func extractZonePathBucketName(fullpath string) (string, string, string, error) {
+	if len(fullpath) == 0 || fullpath[0] != '/' {
+		err := fmt.Errorf("path (%s) must contain an absolute path", fullpath)
+		return "", "", "", err
+	}
+
+	irodsPath := "/"
+	pos := strings.Index(fullpath[1:], "/")
+	zone := ""
+	if pos > 0 {
+		zone = strings.Trim(fullpath[1:pos+1], "/")
+		irodsPath = fullpath // starts with zone
+	} else if pos == -1 {
+		// no path
+		zone = strings.Trim(fullpath[1:], "/")
+		irodsPath = fullpath
+	}
+
+	if len(zone) == 0 || len(irodsPath) == 0 {
+		err := fmt.Errorf("path (%s) must contain an absolute path", fullpath)
+		return "", "", "", err
+	}
+
+	if irodsPath == "/" {
+		err := fmt.Errorf("path (%s) part must not be zone root", fullpath)
+		return "", "", "", err
+	}
+
+	irodsPath = strings.TrimSuffix(irodsPath, "/")
+
+	bucketName := path.Base(irodsPath)
+	irodsParentPath := path.Dir(irodsPath)
+
+	return zone, irodsParentPath, bucketName, nil
 }
 
 func getTicket(username string, password string) (string, bool) {
@@ -264,6 +281,23 @@ func (g *IRODS) NewGatewayLayer(creds madmin.Credentials) (minio.ObjectLayer, er
 	irodsfsclient, err := irodsclient_fs.NewFileSystem(account, fsconfig)
 	if err != nil {
 		return nil, err
+	}
+
+	// if ticket is set, g.zone, g.path, g.bucket are empty
+	if len(g.ticket) > 0 {
+		ticketInfo, err := irodsfsclient.GetTicketForAnonymousAccess(g.ticket)
+		if err != nil {
+			return nil, fmt.Errorf("failed to obtain a ticket information for ticket %s - %v", g.ticket, err)
+		}
+
+		zone, path, bucket, err := extractZonePathBucketName(ticketInfo.Path)
+		if err != nil {
+			return nil, err
+		}
+
+		g.zone = zone
+		g.path = path
+		g.bucket = bucket
 	}
 
 	irodsObjects := irodsObjects{

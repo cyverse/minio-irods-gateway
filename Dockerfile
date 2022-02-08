@@ -25,7 +25,7 @@ COPY cmd/gateway/gateway.go cmd/gateway/
 COPY cmd/gateway/irods cmd/gateway/irods
 
 # get go-irodsclient
-RUN go get github.com/cyverse/go-irodsclient@v0.6.2-0.20220203225657-3c8ad8559a5e && \
+RUN go get github.com/cyverse/go-irodsclient@v0.6.2-0.20220208222243-e124797927f0 && \
     go mod tidy
 
 # rebuild
