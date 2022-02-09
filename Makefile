@@ -33,12 +33,4 @@ run_ticket:
 	-e "MINIO_ROOT_USER=ticket" \
 	-e "MINIO_ROOT_PASSWORD=${IRODS_TICKET}" \
 	$(DOCKER_IMAGE):latest gateway --console-address :$(SERVICE_PORT) irods \
-	irods://data.cyverse.org:1247/iplant/home/iychoi/ticket_test
-
-.PHONY: run_ticket2
-run_ticket2:
-	@docker run -p $(SERVICE_PORT):$(SERVICE_PORT) \
-	-e "MINIO_ROOT_USER=ticket_test_user" \
-	-e "MINIO_ROOT_PASSWORD=ticket_test_pass" \
-	$(DOCKER_IMAGE):latest gateway --console-address :$(SERVICE_PORT) irods \
-	irods://${IRODS_TICKET}@data.cyverse.org:1247/iplant/home/iychoi/ticket_test
+	$(IRODS_END_POINT)

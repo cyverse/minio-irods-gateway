@@ -90,26 +90,34 @@ func irodsGatewayMain(ctx *cli.Context) {
 		logger.FatalIf(fmt.Errorf("ENDPOINT is not given"), "ENDPOINT is not given")
 	}
 
-	logger.Info("Parsing iRODS Endpoint URL - %s", args.First())
-	irodsAccount, err := parseIRODSURL(args.First())
-	if err != nil {
-		logger.FatalIf(err, "ENDPOINT is not correct URL format")
-	}
-
 	// Start the gateway..
-	minio.StartGateway(ctx, irodsAccount)
+	minio.StartGateway(ctx, &IRODS{
+		url: args.First(),
+	})
 }
 
-// parseIRODSURL parses iRODS Access URL string and returns IRODS struct
-func parseIRODSURL(inputURL string) (*IRODS, error) {
+// IRODSAccount stores account info
+type IRODSAccount struct {
+	host   string
+	port   int
+	zone   string
+	path   string
+	bucket string
+
+	username string
+	password string
+	ticket   string
+}
+
+// getIRODSUserPasswordFromURL parses iRODS Access URL string and returns user and password
+func getIRODSUserPasswordFromURL(inputURL string) (string, string, error) {
 	u, err := url.Parse(inputURL)
 	if err != nil {
-		return nil, err
+		return "", "", err
 	}
 
 	user := ""
 	password := ""
-	ticket := ""
 
 	if u.User != nil {
 		uname := u.User.Username()
@@ -120,14 +128,15 @@ func parseIRODSURL(inputURL string) (*IRODS, error) {
 		if pwd, ok := u.User.Password(); ok {
 			password = pwd
 		}
+	}
+	return user, password, nil
+}
 
-		// extract ticket_name
-		if t, ok := getTicket(user, password); ok {
-			user = ""
-			password = ""
-			ticket = t
-			logger.Info("use '%s' as the ticket for access", t)
-		}
+// getIRODSHostFromURL parses iRODS Access URL string and returns host, port, fullpath
+func getIRODSHostFromURL(inputURL string) (string, int, string, error) {
+	u, err := url.Parse(inputURL)
+	if err != nil {
+		return "", 0, "", err
 	}
 
 	host := ""
@@ -137,39 +146,33 @@ func parseIRODSURL(inputURL string) (*IRODS, error) {
 	if len(u.Port()) > 0 {
 		port64, err := strconv.ParseInt(u.Port(), 10, 32)
 		if err != nil {
-			return nil, err
+			return "", 0, "", err
 		}
 		port = int(port64)
 	}
 
-	zone := ""
-	irodsParentPath := ""
-	bucketName := ""
+	fullpath := path.Clean(u.Path)
 
-	// for ticket-based access, set zone, path, bucket empty
-	if len(ticket) == 0 {
-		// get path from URL
-		fullpath := path.Clean(u.Path)
-		zone, irodsParentPath, bucketName, err = extractZonePathBucketName(fullpath)
-		if err != nil {
-			return nil, err
-		}
-	}
-
-	return &IRODS{
-		host:   host,
-		port:   port,
-		zone:   zone,
-		path:   irodsParentPath,
-		bucket: bucketName,
-
-		username: user,
-		password: password,
-		ticket:   ticket,
-	}, nil
+	return host, port, fullpath, nil
 }
 
-func extractZonePathBucketName(fullpath string) (string, string, string, error) {
+// getTicketAccount gets user, password, ticket
+func getTicketAccount(username string, password string) (string, string, string) {
+	anonymousUser := env.Get("IRODS_ANONYMOUS_USERNAME", "anonymous")
+	anonymousPassword := env.Get("IRODS_ANONYMOUS_PASSWORD", "")
+
+	if strings.ToLower(username) == "ticket" {
+		// If username is "ticket", we think password is <ticket_name>
+		return anonymousUser, anonymousPassword, password
+	} else if len(password) == 0 && len(username) > 0 {
+		// If password is not given, username is a ticket
+		return anonymousUser, anonymousPassword, username
+	}
+
+	return username, password, ""
+}
+
+func getZonePathBucketNameFromPath(fullpath string) (string, string, string, error) {
 	if len(fullpath) == 0 || fullpath[0] != '/' {
 		err := fmt.Errorf("path (%s) must contain an absolute path", fullpath)
 		return "", "", "", err
@@ -205,28 +208,10 @@ func extractZonePathBucketName(fullpath string) (string, string, string, error) 
 	return zone, irodsParentPath, bucketName, nil
 }
 
-func getTicket(username string, password string) (string, bool) {
-	if strings.ToLower(username) == "ticket" {
-		// If username is "ticket", we think password is <ticket_name>
-		return password, true
-	} else if len(password) == 0 && len(username) > 0 {
-		// If password is not given, username is a ticket
-		return username, true
-	}
-	return "", false
-}
-
 // IRODS implements Gateway.
 type IRODS struct {
-	host   string
-	port   int
-	zone   string
-	path   string
-	bucket string
-
-	username string
-	password string
-	ticket   string
+	url     string
+	account IRODSAccount // filled from url
 }
 
 // Name implements Gateway interface.
@@ -235,36 +220,72 @@ func (g *IRODS) Name() string {
 }
 
 func (g *IRODS) emptyAccount() bool {
-	if len(g.username) == 0 && len(g.password) == 0 && len(g.ticket) == 0 {
+	if len(g.account.username) == 0 && len(g.account.password) == 0 && len(g.account.ticket) == 0 {
 		return true
 	}
 	return false
 }
 
-func (g *IRODS) setAnonymousUserForTicket() {
-	if len(g.ticket) > 0 {
-		g.username = env.Get("IRODS_ANONYMOUS_USERNAME", "anonymous")
-		g.password = env.Get("IRODS_ANONYMOUS_PASSWORD", "")
+func (g *IRODS) fillIRODSAccount(creds madmin.Credentials) error {
+	user, password, err := getIRODSUserPasswordFromURL(g.url)
+	if err != nil {
+		logger.FatalIf(err, "ENDPOINT is not correct URL format")
 	}
+
+	// if user, password is not given via Endpoint URL, use AccessKey and SecretKey
+	if len(user) == 0 && len(password) == 0 {
+		user = creds.AccessKey
+		password = creds.SecretKey
+	}
+
+	// check ticket
+	user, password, ticket := getTicketAccount(user, password)
+	if len(ticket) > 0 {
+		logger.Info("use '%s' as the ticket for access", ticket)
+	}
+
+	g.account.username = user
+	g.account.password = password
+	g.account.ticket = ticket
+
+	// get iRODS host
+	host, port, fullpath, err := getIRODSHostFromURL(g.url)
+	if err != nil {
+		logger.FatalIf(err, "ENDPOINT is not correct URL format")
+	}
+
+	g.account.host = host
+	g.account.port = port
+
+	zone := ""
+	irodsParentPath := ""
+	bucketName := ""
+
+	// if it's not ticket based access, get zone, path, bucketname from path part in URL
+	// if it's ticket based access, leave the fields empty, will be populated later
+	if len(ticket) == 0 {
+		zone, irodsParentPath, bucketName, err = getZonePathBucketNameFromPath(fullpath)
+		if err != nil {
+			return err
+		}
+	}
+
+	g.account.zone = zone
+	g.account.path = irodsParentPath
+	g.account.bucket = bucketName
+
+	return nil
 }
 
 // NewGatewayLayer returns iRODS ObjectLayer.
 func (g *IRODS) NewGatewayLayer(creds madmin.Credentials) (minio.ObjectLayer, error) {
-	if g.emptyAccount() {
-		// extract ticket_name
-		if t, ok := getTicket(creds.AccessKey, creds.SecretKey); ok {
-			g.ticket = t
-			logger.Info("use '%s' as the ticket for access", t)
-		} else {
-			g.username = creds.AccessKey
-			g.password = creds.SecretKey
-		}
+	err := g.fillIRODSAccount(creds)
+	if err != nil {
+		return nil, err
 	}
 
-	g.setAnonymousUserForTicket()
-
-	account, err := irodsclient_types.CreateIRODSAccountForTicket(g.host, g.port,
-		g.username, g.zone, irodsclient_types.AuthSchemeNative, g.password, g.ticket, "")
+	account, err := irodsclient_types.CreateIRODSAccountForTicket(g.account.host, g.account.port,
+		g.account.username, g.account.zone, irodsclient_types.AuthSchemeNative, g.account.password, g.account.ticket, "")
 	if err != nil {
 		return nil, fmt.Errorf("failed to create an IRODS Account - %v", err)
 	}
@@ -283,29 +304,29 @@ func (g *IRODS) NewGatewayLayer(creds madmin.Credentials) (minio.ObjectLayer, er
 		return nil, err
 	}
 
-	// if ticket is set, g.zone, g.path, g.bucket are empty
-	if len(g.ticket) > 0 {
-		ticketInfo, err := irodsfsclient.GetTicketForAnonymousAccess(g.ticket)
+	// if ticket is set, fill g.zone, g.path, g.bucket
+	if len(g.account.ticket) > 0 {
+		ticketInfo, err := irodsfsclient.GetTicketForAnonymousAccess(g.account.ticket)
 		if err != nil {
-			return nil, fmt.Errorf("failed to obtain a ticket information for ticket %s - %v", g.ticket, err)
+			return nil, fmt.Errorf("failed to obtain a ticket information for ticket %s - %v", g.account.ticket, err)
 		}
 
-		zone, path, bucket, err := extractZonePathBucketName(ticketInfo.Path)
+		zone, path, bucket, err := getZonePathBucketNameFromPath(ticketInfo.Path)
 		if err != nil {
 			return nil, err
 		}
 
-		g.zone = zone
-		g.path = path
-		g.bucket = bucket
+		g.account.zone = zone
+		g.account.path = path
+		g.account.bucket = bucket
 	}
 
 	irodsObjects := irodsObjects{
 		client:   irodsfsclient,
-		zone:     g.zone,
-		path:     g.path,
-		bucket:   g.bucket,
-		username: g.username,
+		zone:     g.account.zone,
+		path:     g.account.path,
+		bucket:   g.account.bucket,
+		username: g.account.username,
 		listPool: minio.NewTreeWalkPool(time.Minute * 30),
 	}
 
