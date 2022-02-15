@@ -11,6 +11,5 @@ client = Minio("127.0.0.1:9000",
             secret_key=irods_password,
             secure=False)
 
-objects = client.list_objects("iychoi")
-for obj in objects:
+for obj in client.list_objects("iychoi"):
     print(obj.object_name)
