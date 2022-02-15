@@ -13,14 +13,20 @@ This will build a docker image `minio-irods-gateway:latest`.
 export IRODS_USER_NAME=<username>
 export IRODS_USER_PASSWORD=<password>
 
-docker run -p 9001:9001 \
+docker run -p 9000:9000 -p 9001:9001 \
 	-e "MINIO_ROOT_USER=${IRODS_USER_NAME}" \
 	-e "MINIO_ROOT_PASSWORD=${IRODS_USER_PASSWORD}" \
-	minio-irods-gateway:latest gateway --console-address :9001 irods \
+	minio-irods-gateway:latest gateway \
+	--address :9000 --console-address :9001 irods \
 	irods://data.cyverse.org:1247/iplant/home/iychoi
 ```
 
-This will run the MinIO-iRODS-Gateway on port 9001.
+This will run the MinIO-iRODS-Gateway on port 9000 and 9001.
+
+- Port 9000: API service port
+- Port 9001: Console service port
+
+
 MinIO Gateway Console Login Username will be `<username>`, and password will be `<password>`.
 The MinIO-iRODS-Gateway will connect to CyVerse DataStore using following information.
 
@@ -31,6 +37,7 @@ The MinIO-iRODS-Gateway will connect to CyVerse DataStore using following inform
 
 To access the gateway console, open up a web browser and access `localhost:9001`.
 
+To access the gateway in code (e.g., Boto3), use `http://localhost:9000` for S3 endpoint URL.
 
 ## References
 
