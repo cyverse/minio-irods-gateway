@@ -11,8 +11,8 @@ ENV MINIO_ACCESS_KEY_FILE=access_key \
 RUN git clone https://github.com/minio/minio
 WORKDIR minio
 # check out to a particular commit that works
-# e49c1845955a7419698faccff1f7c514ee84ae7c on Nov 29, 2021
-RUN git checkout e49c1845955a7419698faccff1f7c514ee84ae7c
+# e3e0532613699b5c5c51ae9536e90167b9e4d6b9 on Feb 15, 2022
+RUN git checkout e3e0532613699b5c5c51ae9536e90167b9e4d6b9
 RUN go mod tidy
 
 # build minio for the first time (to cache)

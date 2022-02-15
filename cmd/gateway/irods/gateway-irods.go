@@ -22,8 +22,6 @@ import (
 	"github.com/minio/minio-go/v7/pkg/s3utils"
 	minio "github.com/minio/minio/cmd"
 	"github.com/minio/minio/internal/logger"
-	"github.com/minio/pkg/bucket/policy"
-	"github.com/minio/pkg/bucket/policy/condition"
 	"github.com/minio/pkg/env"
 
 	irodsclient_fs "github.com/cyverse/go-irodsclient/fs"
@@ -820,6 +818,7 @@ func (l *irodsObjects) DeleteObjects(ctx context.Context, bucket string, objects
 	return dobjects, errs
 }
 
+/*
 // GetBucketPolicy will get policy on bucket
 func (l *irodsObjects) GetBucketPolicy(ctx context.Context, bucket string) (bucketPolicy *policy.Policy, err error) {
 	// irodsPath := l.irodsPathJoin(bucket)
@@ -845,6 +844,7 @@ func (l *irodsObjects) GetBucketPolicy(ctx context.Context, bucket string) (buck
 		},
 	}, nil
 }
+*/
 
 // IsCompressionSupported returns whether compression is applicable for this layer.
 func (l *irodsObjects) IsCompressionSupported() bool {

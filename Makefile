@@ -11,7 +11,8 @@ MINIO_ROOT_PASSWORD=${IRODS_USER_PASSWORD}
 IRODS_END_POINT=irods://data.cyverse.org:1247
 IRODS_PATH=/iplant/home/iychoi
 
-SERVICE_PORT=9001
+API_SERVICE_PORT=9000
+CONSOLE_SERVICE_PORT=9001
 
 .EXPORT_ALL_VARIABLES:
 
@@ -19,18 +20,24 @@ SERVICE_PORT=9001
 image:
 	docker build -t $(DOCKER_IMAGE):latest .
 
+.PHONY: push
+push: image
+	docker push $(DOCKER_IMAGE):latest
+
 .PHONY: run
 run:
-	@docker run -p $(SERVICE_PORT):$(SERVICE_PORT) \
+	@docker run -p $(API_SERVICE_PORT):$(API_SERVICE_PORT) \
+	-p $(CONSOLE_SERVICE_PORT):$(CONSOLE_SERVICE_PORT) \
 	-e "MINIO_ROOT_USER=$(MINIO_ROOT_USER)" \
 	-e "MINIO_ROOT_PASSWORD=$(MINIO_ROOT_PASSWORD)" \
-	$(DOCKER_IMAGE):latest gateway --console-address :$(SERVICE_PORT) irods \
+	$(DOCKER_IMAGE):latest gateway --address :$(API_SERVICE_PORT) --console-address :$(CONSOLE_SERVICE_PORT) irods \
 	$(IRODS_END_POINT)$(IRODS_PATH)
 
 .PHONY: run_ticket
 run_ticket:
-	@docker run -p $(SERVICE_PORT):$(SERVICE_PORT) \
+	@docker run -p $(API_SERVICE_PORT):$(API_SERVICE_PORT) \
+	-p $(CONSOLE_SERVICE_PORT):$(CONSOLE_SERVICE_PORT) \
 	-e "MINIO_ROOT_USER=ticket" \
 	-e "MINIO_ROOT_PASSWORD=${IRODS_TICKET}" \
-	$(DOCKER_IMAGE):latest gateway --console-address :$(SERVICE_PORT) irods \
+	$(DOCKER_IMAGE):latest gateway --address :$(API_SERVICE_PORT) --console-address :$(CONSOLE_SERVICE_PORT) irods \
 	$(IRODS_END_POINT)
